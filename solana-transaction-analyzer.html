@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Solana Block Interference</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;line-height:1.5;color:#1a1a1a;padding:20px;max-width:1200px;margin:0 auto}
+.lbl{font-size:11px;color:#666}
+.card{background:#f5f5f5;border-radius:8px;padding:8px 12px}
+.bdr{border:1px solid #e0e0e0;border-radius:8px}
+.mono{font-family:monospace;font-size:11px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin:14px 0}
+.stat-val{font-size:22px;font-weight:600}
+.click{cursor:pointer;color:#185fa5;text-decoration:underline}
+.bar-w{background:#7F77DD;height:14px;border-radius:2px;min-width:1px}
+.bar-r{background:#B5D4F4;height:14px;border-radius:2px;min-width:1px}
+.bar-wrap{display:flex;gap:1px;align-items:center}
+input[type=number]{padding:4px 8px;border:1px solid #ccc;border-radius:4px;width:160px}
+button{padding:6px 14px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer}
+button:hover{background:#f0f0f0}
+button:disabled{opacity:.5;cursor:default}
+#status{font-size:12px;color:#666;margin-left:8px}
+.section-title{font-size:13px;font-weight:600;margin:16px 0 8px;color:#333}
+.acct-row{display:grid;grid-template-columns:200px 1fr 50px 50px 60px;gap:8px;align-items:center;padding:4px 8px;border-bottom:1px solid #f0f0f0;cursor:pointer;font-size:12px}
+.acct-row:hover{background:#f8f8f8}
+.acct-row.selected{background:#e6f1fb}
+.acct-header{font-weight:600;color:#666;font-size:11px;cursor:default;border-bottom:2px solid #ddd}
+.acct-header:hover{background:transparent}
+.cluster-row{display:grid;grid-template-columns:50px 1fr 70px 80px;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid #f0f0f0;cursor:pointer;font-size:12px}
+.cluster-row:hover{background:#f8f8f8}
+.cluster-row.selected{background:#e6f1fb}
+.cluster-header{font-weight:600;color:#666;font-size:11px;cursor:default;border-bottom:2px solid #ddd}
+.cluster-header:hover{background:transparent}
+.acct-pill{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-family:monospace;margin:1px 2px;background:#EEEDFE;color:#534AB7}
+.acct-pill.read{background:#f0f0f0;color:#666}
+.detail-tx{display:flex;gap:6px;align-items:center;padding:2px 0;font-family:monospace;font-size:11px}
+.tag-w{font-size:9px;padding:0 4px;border-radius:2px;background:#EEEDFE;color:#534AB7}
+.tag-r{font-size:9px;padding:0 4px;border-radius:2px;background:#f0f0f0;color:#666}
+.tab-bar{display:flex;gap:0;margin:16px 0 0;border-bottom:2px solid #e0e0e0}
+.tab{padding:8px 16px;cursor:pointer;font-size:13px;font-weight:500;color:#666;border-bottom:2px solid transparent;margin-bottom:-2px}
+.tab:hover{color:#333}
+.tab.active{color:#185fa5;border-bottom-color:#185fa5}
+.cu{font-size:10px;color:#888;min-width:55px;text-align:right}
+#graphCanvas{background:#fafafa;border-radius:8px;border:1px solid #e0e0e0;cursor:grab;display:block}
+#graphCanvas:active{cursor:grabbing}
+</style></head><body>
+<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+  <label>Slot: <input type="number" id="slotInput" value="411635532"></label>
+  <label>Lanes: <input type="number" id="lanesInput" value="4" style="width:60px" min="1" max="32"></label>
+  <button id="fetchBtn" onclick="doFetch()">Fetch block</button>
+  <span id="status"></span>
+</div>
+<div id="statsEl"></div>
+<div id="tabBar"></div>
+<div id="mainEl"></div>
+<div id="detailEl"></div>
+<script>
+var HELIUS="https://mainnet.helius-rpc.com/?api-key=4c212763-678a-4957-b51e-dff3572d41bc";
+var HIDE=new Set(["11111111111111111111111111111111","ComputeBudget111111111111111111111111111","Vote111111111111111111111111111111111111","SysvarC1ock11111111111111111111111111111","SysvarRent111111111111111111111111111111","SysvarS1otHashes111111111111111111111111","Sysvar1nstructions1111111111111111111111","SysvarRecentB1ockHashes11111111111111111","SysvarStakeHistory1111111111111111111111","StakeConfig11111111111111111111111111111","Ed25519SigVerify111111111111111111111111","KeccakSecp256k11111111111111111111111111"]);
+var SYSVAR_RO=new Set(["SysvarC1ock11111111111111111111111111111","SysvarRent111111111111111111111111111111","SysvarS1otHashes111111111111111111111111","Sysvar1nstructions1111111111111111111111","SysvarRecentB1ockHashes11111111111111111","SysvarStakeHistory1111111111111111111111","StakeConfig11111111111111111111111111111","ComputeBudget111111111111111111111111111","Vote111111111111111111111111111111111111","11111111111111111111111111111111","TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA","TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb","ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL","Ed25519SigVerify111111111111111111111111","KeccakSecp256k11111111111111111111111111","MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr","Stake11111111111111111111111111111111111"]);
+var PAL=["#7F77DD","#1D9E75","#D85A30","#D4537E","#378ADD","#639922","#BA7517","#E24B4A","#534AB7","#0F6E56","#993C1D","#72243E"];
+function short(s,n){n=n||4;return s&&s.length>n*2+1?s.slice(0,n)+"\u2026"+s.slice(-n):s;}
+function fmtCU(n){return n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":String(n);}
+
+var DATA=null;
+var STATE={tab:"clusters",selAcct:null,selCluster:null};
+var GS={nodes:[],edges:[],hov:null,sel:null,drag:null,pan:{x:0,y:0},zoom:1,panSt:null,infoFn:null};
+var SIM={lastHovered:null,lastLane:-1,locked:null,pan:{x:0},zoom:1,dragStart:null};
+
+async function doFetch(){
+  var btn=document.getElementById("fetchBtn"),st=document.getElementById("status");
+  btn.disabled=true;
+  var slot=parseInt(document.getElementById("slotInput").value)||411635532;
+  st.textContent="Fetching slot "+slot+"\u2026";
+  DATA=null;STATE.selAcct=null;STATE.selCluster=null;
+  document.getElementById("statsEl").innerHTML="";
+  document.getElementById("tabBar").innerHTML="";
+  document.getElementById("mainEl").innerHTML="";
+  document.getElementById("detailEl").innerHTML="";
+  try{
+    var r=await fetch(HELIUS,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({jsonrpc:"2.0",id:1,method:"getBlock",params:[slot,{encoding:"json",transactionDetails:"full",maxSupportedTransactionVersion:0,rewards:false}]})});
+    var d=await r.json();
+    if(d.error)throw new Error(d.error.message);
+    if(!d.result||!d.result.transactions)throw new Error("Empty block");
+    st.textContent="Parsing "+d.result.transactions.length+" transactions\u2026";
+    var txList=[];
+    for(var i=0;i<d.result.transactions.length;i++){
+      var tx=d.result.transactions[i],msg=tx.transaction?tx.transaction.message:{},aks=msg.accountKeys||[];
+      var hdr=msg.header||{},nS=hdr.numRequiredSignatures||0,nRoS=hdr.numReadonlySignedAccounts||0,nRoU=hdr.numReadonlyUnsignedAccounts||0;
+      var keys=[],wr={};
+      for(var j=0;j<aks.length;j++){keys.push(aks[j]);if(j<nS-nRoS||(j>=nS&&j<aks.length-nRoU))wr[aks[j]]=1;}
+      var luts=tx.meta?tx.meta.loadedAddresses:null;
+      if(luts){if(luts.writable)for(var j2=0;j2<luts.writable.length;j2++){keys.push(luts.writable[j2]);wr[luts.writable[j2]]=1;}
+      if(luts.readonly)for(var j3=0;j3<luts.readonly.length;j3++)keys.push(luts.readonly[j3]);}
+      var sigs=tx.transaction?tx.transaction.signatures:[];
+      txList.push({i:i,sig:(sigs[0]||"?").slice(0,12),keys:keys,wr:wr,
+        isV:keys.indexOf("Vote111111111111111111111111111111111111")>=0,
+        cu:tx.meta?tx.meta.computeUnitsConsumed||0:0,fee:tx.meta?tx.meta.fee||0:0,err:tx.meta?tx.meta.err:null});
+    }
+    var a2t={};
+    for(var i2=0;i2<txList.length;i2++)for(var j4=0;j4<txList[i2].keys.length;j4++){var k=txList[i2].keys[j4];if(!a2t[k])a2t[k]=[];a2t[k].push(i2);}
+    var acctStats={};
+    for(var a in a2t){if(a2t[a].length<2)continue;var w=0,r2=0;for(var j5=0;j5<a2t[a].length;j5++){if(txList[a2t[a][j5]].wr[a])w++;else r2++;}acctStats[a]={total:a2t[a].length,writers:w,readers:r2,txIdxs:a2t[a]};}
+    DATA={txList:txList,a2t:a2t,acctStats:acctStats,slot:slot};
+    st.textContent="Done \u2014 "+txList.length+" transactions";
+    render();
+  }catch(e){st.textContent="Error: "+e.message;}
+  btn.disabled=false;
+}
+
+function getFiltered(){
+  var txList=DATA.txList,acctStats=DATA.acctStats;
+  var fAccts={};
+  for(var a in acctStats){var info=acctStats[a];if(info.writers<2)continue;fAccts[a]=info;}
+  var txWS={};
+  for(var i=0;i<txList.length;i++){
+    var tx=txList[i],wk=[];
+    for(var j=0;j<tx.keys.length;j++)if(tx.wr[tx.keys[j]]&&!HIDE.has(tx.keys[j]))wk.push(tx.keys[j]);
+    wk.sort();var key=wk.length?wk.join("|"):"__ro__"+i;
+    if(!txWS[key])txWS[key]={accts:wk,txIdxs:[],readAccts:{},totalCU:0};
+    txWS[key].txIdxs.push(i);txWS[key].totalCU+=tx.cu;
+    for(var j2=0;j2<tx.keys.length;j2++){var k=tx.keys[j2];if(!tx.wr[k]&&!HIDE.has(k))txWS[key].readAccts[k]=1;}
+  }
+  var clusters=[];for(var k2 in txWS)clusters.push(txWS[k2]);
+  clusters.sort(function(a,b){return b.txIdxs.length-a.txIdxs.length;});
+  var totalCU=0;for(var i2=0;i2<txList.length;i2++)totalCU+=txList[i2].cu;
+  return{fAccts:fAccts,clusters:clusters,totalCU:totalCU};
+}
+
+function forceLayout(nodes,edges,iter){
+  var k=60,gravity=0.01;
+  for(var it=0;it<iter;it++){
+    var temp=Math.max(0.05,1-it/iter)*3;
+    for(var i=0;i<nodes.length;i++){nodes[i].vx=0;nodes[i].vy=0;
+      nodes[i].vx-=nodes[i].x*gravity;nodes[i].vy-=nodes[i].y*gravity;
+      for(var j=0;j<nodes.length;j++){if(i===j)continue;
+        var dx=nodes[i].x-nodes[j].x,dy=nodes[i].y-nodes[j].y,dist=Math.sqrt(dx*dx+dy*dy)||0.1;
+        var minD=nodes[i].r+nodes[j].r+5,f=k*k/(dist*dist)*temp;
+        if(dist<minD)f+=((minD-dist)/minD)*50*temp;
+        nodes[i].vx+=dx/dist*f;nodes[i].vy+=dy/dist*f;}}
+    for(var e=0;e<edges.length;e++){
+      var a=nodes[edges[e].from],b=nodes[edges[e].to];if(!a||!b)continue;
+      var dx2=b.x-a.x,dy2=b.y-a.y,dist2=Math.sqrt(dx2*dx2+dy2*dy2)||0.1;
+      var w=Math.sqrt(Math.min(edges[e].weight||1,20)),f2=(dist2-k)*0.05*temp*w;
+      a.vx+=dx2/dist2*f2;a.vy+=dy2/dist2*f2;b.vx-=dx2/dist2*f2;b.vy-=dy2/dist2*f2;}
+    for(var i2=0;i2<nodes.length;i2++){
+      var sp=Math.sqrt(nodes[i2].vx*nodes[i2].vx+nodes[i2].vy*nodes[i2].vy),ms=15*temp;
+      if(sp>ms){nodes[i2].vx=nodes[i2].vx/sp*ms;nodes[i2].vy=nodes[i2].vy/sp*ms;}
+      nodes[i2].x+=nodes[i2].vx;nodes[i2].y+=nodes[i2].vy;}
+  }
+}
+
+function drawCanvas(){
+  var canvas=document.getElementById("graphCanvas");if(!canvas)return;
+  var ctx=canvas.getContext("2d"),W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);ctx.save();ctx.translate(W/2+GS.pan.x,H/2+GS.pan.y);ctx.scale(GS.zoom,GS.zoom);
+  for(var e=0;e<GS.edges.length;e++){
+    var ed=GS.edges[e],a=GS.nodes[ed.from],b=GS.nodes[ed.to];if(!a||!b)continue;
+    var hl=GS.hov!==null&&(ed.from===GS.hov||ed.to===GS.hov);
+    var sl=GS.sel!==null&&(ed.from===GS.sel||ed.to===GS.sel);
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+    ctx.strokeStyle=sl?"#185fa5":hl?"#999":"#ddd";
+    ctx.lineWidth=Math.min(ed.weight||1,6)*(sl||hl?1.5:0.8);ctx.stroke();}
+  for(var i=0;i<GS.nodes.length;i++){
+    var n=GS.nodes[i],hl2=GS.hov===i,sl2=GS.sel===i;
+    var conn=false;if(GS.sel!==null&&GS.sel!==i)for(var e2=0;e2<GS.edges.length;e2++){var ed2=GS.edges[e2];if((ed2.from===GS.sel&&ed2.to===i)||(ed2.to===GS.sel&&ed2.from===i)){conn=true;break;}}
+    ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
+    ctx.fillStyle=sl2?"#185fa5":conn?"#D85A30":hl2?n.color+"cc":n.color;ctx.fill();
+    if(sl2||hl2){ctx.strokeStyle="#333";ctx.lineWidth=2;ctx.stroke();}
+    if(n.label){var fs=Math.max(7,Math.min(12,n.r*0.8));ctx.font="bold "+fs+"px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillStyle="#fff";ctx.fillText(n.label,n.x,n.y);}}
+  ctx.restore();
+  var ni=GS.sel!==null?GS.sel:GS.hov;
+  if(ni!==null&&GS.nodes[ni]&&GS.infoFn)GS.infoFn(ni);
+  else document.getElementById("detailEl").innerHTML="";
+}
+
+function setupCanvas(){
+  var canvas=document.getElementById("graphCanvas");if(!canvas)return;
+  var rect=function(){return canvas.getBoundingClientRect();};
+  var tw=function(ex,ey){var r=rect();return{x:(ex-r.left-r.width/2-GS.pan.x)/GS.zoom,y:(ey-r.top-r.height/2-GS.pan.y)/GS.zoom};};
+  var hit=function(ex,ey){var p=tw(ex,ey);for(var i=GS.nodes.length-1;i>=0;i--){var n=GS.nodes[i],dx=n.x-p.x,dy=n.y-p.y;if(dx*dx+dy*dy<=n.r*n.r*2)return i;}return null;};
+  canvas.onmousemove=function(e){
+    if(GS.drag!==null){var p=tw(e.clientX,e.clientY);GS.nodes[GS.drag].x=p.x;GS.nodes[GS.drag].y=p.y;drawCanvas();return;}
+    if(GS.panSt){GS.pan.x=GS.panSt.px+(e.clientX-GS.panSt.mx);GS.pan.y=GS.panSt.py+(e.clientY-GS.panSt.my);drawCanvas();return;}
+    var h=hit(e.clientX,e.clientY);if(h!==GS.hov){GS.hov=h;drawCanvas();}};
+  canvas.onmousedown=function(e){var h=hit(e.clientX,e.clientY);if(h!==null){GS.drag=h;GS.sel=h;drawCanvas();}else GS.panSt={mx:e.clientX,my:e.clientY,px:GS.pan.x,py:GS.pan.y};};
+  canvas.onmouseup=function(){GS.drag=null;GS.panSt=null;};
+  canvas.onmouseleave=function(){GS.drag=null;GS.panSt=null;GS.hov=null;drawCanvas();};
+  canvas.onclick=function(e){if(GS.drag!==null)return;GS.sel=hit(e.clientX,e.clientY);drawCanvas();};
+  canvas.onwheel=function(e){e.preventDefault();GS.zoom=Math.max(0.1,Math.min(5,GS.zoom*(e.deltaY>0?0.9:1.1)));drawCanvas();};
+}
+
+function runSchedule(simTxList,txAccs,LANES,bcu){
+  var lanes=[];for(var l=0;l<LANES;l++)lanes.push([]);
+  var scheduled=[],dropped=[],debugLog=[];
+  var acctBusy={};
+  function registerTx(txIdx,start,end){
+    var allKeys=simTxList[txIdx].keys;
+    for(var j=0;j<allKeys.length;j++){
+      var a=allKeys[j];if(SYSVAR_RO.has(a))continue;
+      if(!acctBusy[a])acctBusy[a]=[];
+      acctBusy[a].push({start:start,end:end,writes:!!simTxList[txIdx].wr[a]});
+    }
+  }
+  for(var i=0;i<simTxList.length;i++){
+    var cu=Math.max(simTxList[i].cu,1);
+    var bestLane=-1,bestStart=1e18;
+    var myKeys=simTxList[i].keys;
+    for(var l=0;l<LANES;l++){
+      var le=lanes[l],gapCount=le.length+1;
+      for(var gi=0;gi<gapCount;gi++){
+        var gapStart=gi===0?0:le[gi-1].end;
+        var gapEnd=gi<le.length?le[gi].start:bcu;
+        if(gapEnd-gapStart<cu)continue;
+        var pos=gapStart,stable=false;
+        while(!stable){
+          stable=true;
+          for(var ki=0;ki<myKeys.length;ki++){
+            var a=myKeys[ki];if(SYSVAR_RO.has(a)||!acctBusy[a])continue;
+            var myW=!!simTxList[i].wr[a];
+            var ivs=acctBusy[a];
+            for(var bi=0;bi<ivs.length;bi++){
+              if(!myW&&!ivs[bi].writes)continue;
+              if(ivs[bi].end>pos&&ivs[bi].start<pos+cu){if(ivs[bi].end>pos){pos=ivs[bi].end;stable=false;}}
+            }
+          }
+        }
+        if(pos+cu<=gapEnd&&pos+cu<=bcu){
+          if(pos<bestStart||(pos===bestStart&&l<bestLane)){bestStart=pos;bestLane=l;}
+          break;
+        }
+      }
+    }
+    if(bestLane>=0){
+      var entry={txIdx:i,start:bestStart,end:bestStart+cu,lane:bestLane};
+      var ins=lanes[bestLane].length;
+      for(var g=0;g<lanes[bestLane].length;g++){if(lanes[bestLane][g].start>bestStart){ins=g;break;}}
+      lanes[bestLane].splice(ins,0,entry);
+      registerTx(i,bestStart,bestStart+cu);
+      scheduled.push(entry);
+    } else dropped.push(i);
+  }
+  return{lanes:lanes,scheduled:scheduled,dropped:dropped};
+}
+
+function renderSchedule(simTxList,txAccs,res,LANES,bcu,f){
+  var lanes=res.lanes,scheduled=res.scheduled,dropped=res.dropped;
+  var maxTime=1;
+  for(var l=0;l<LANES;l++)for(var j=0;j<lanes[l].length;j++)if(lanes[l][j].end>maxTime)maxTime=lanes[l][j].end;
+  var seqTime=0;for(var i=0;i<simTxList.length;i++)seqTime+=Math.max(simTxList[i].cu,1);
+  var speedup=seqTime/maxTime;
+  var schedCU=0;for(var i2=0;i2<scheduled.length;i2++)schedCU+=simTxList[scheduled[i2].txIdx].cu;
+  var utilization=schedCU/(maxTime*LANES)*100;
+  var mainEl=document.getElementById("mainEl");
+  var laneH=50,topMargin=30,laneGap=10;
+  var canvasH=40+LANES*(laneH+laneGap)+40;
+
+  var h='<div class="stats">'+
+    '<div class="card"><div class="lbl">Scheduled</div><div class="stat-val">'+scheduled.length+'/'+simTxList.length+'</div></div>'+
+    '<div class="card"><div class="lbl">Parallel time</div><div class="stat-val">'+fmtCU(maxTime)+'</div></div>'+
+    '<div class="card"><div class="lbl">Sequential time</div><div class="stat-val">'+fmtCU(seqTime)+'</div></div>'+
+    '<div class="card"><div class="lbl">Speedup</div><div class="stat-val">'+speedup.toFixed(2)+'\u00d7</div></div>'+
+    '<div class="card"><div class="lbl">Utilization</div><div class="stat-val">'+utilization.toFixed(1)+'%</div></div>'+
+    '<div class="card"><div class="lbl">Dropped</div><div class="stat-val">'+dropped.length+'</div></div></div>';
+
+  h+='<div class="lbl" style="margin-bottom:8px">Hover for tx details. Right-click to lock/unlock. Scroll to zoom, drag to pan.</div>';
+  h+='<div id="lockStatus" style="font-size:12px;margin-bottom:4px;color:#854F0B;min-height:18px"></div>';
+  h+='<canvas id="simCanvas" width="1000" height="'+canvasH+'" style="display:block;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;cursor:crosshair;width:100%"></canvas>';
+  mainEl.innerHTML=h;
+
+  SIM={lastHovered:null,lastLane:-1,locked:null,pan:{x:0},zoom:1,dragStart:null};
+
+  function drawSim(){
+    var canvas=document.getElementById("simCanvas");if(!canvas)return;
+    var ctx=canvas.getContext("2d"),W=canvas.width,H=canvas.height;
+    ctx.clearRect(0,0,W,H);
+    var scaleX=(W-60)/maxTime*SIM.zoom,offX=30+SIM.pan.x;
+    for(var l=0;l<LANES;l++){
+      var y=topMargin+l*(laneH+laneGap);
+      ctx.fillStyle=l%2===0?"#f8f8f8":"#f0f0f0";ctx.fillRect(0,y,W,laneH);
+      var prev=0;
+      for(var j=0;j<lanes[l].length;j++){
+        if(lanes[l][j].start>prev){var gx1=offX+prev*scaleX,gx2=offX+lanes[l][j].start*scaleX;ctx.fillStyle="rgba(226,75,74,0.12)";ctx.fillRect(Math.max(gx1,0),y+2,gx2-gx1,laneH-4);}
+        prev=lanes[l][j].end;}
+      if(prev<maxTime){var gx1b=offX+prev*scaleX,gx2b=offX+maxTime*scaleX;ctx.fillStyle="rgba(226,75,74,0.12)";ctx.fillRect(Math.max(gx1b,0),y+2,gx2b-gx1b,laneH-4);}
+      ctx.fillStyle="#999";ctx.font="bold 11px system-ui";ctx.textAlign="right";ctx.textBaseline="middle";ctx.fillText("Lane "+l,25,y+laneH/2);
+    }
+    for(var l2=0;l2<LANES;l2++){
+      var y2=topMargin+l2*(laneH+laneGap)+3;
+      for(var j2=0;j2<lanes[l2].length;j2++){
+        var e=lanes[l2][j2],tx=simTxList[e.txIdx];
+        var x1=offX+e.start*scaleX,x2=offX+e.end*scaleX,w=Math.max(x2-x1,1);
+        var nAccts=tx.keys.filter(function(k){return!SYSVAR_RO.has(k);}).length;
+        var t=Math.min(nAccts/40,1);
+        var cr=Math.round(151*(1-t)+226*t),cg=Math.round(196*(1-t)+75*t),cb=Math.round(89*(1-t)+74*t);
+        ctx.fillStyle="rgb("+cr+","+cg+","+cb+")";
+        ctx.fillRect(x1,y2,w,laneH-6);
+        if(w>30){ctx.fillStyle="#fff";ctx.font="9px monospace";ctx.textAlign="left";ctx.textBaseline="middle";ctx.fillText("#"+e.txIdx,x1+3,y2+(laneH-6)/2);}
+      }
+    }
+    ctx.fillStyle="#666";ctx.font="10px system-ui";ctx.textAlign="center";ctx.textBaseline="top";
+    var axisY=topMargin+LANES*(laneH+laneGap)+5;
+    var step=Math.pow(10,Math.floor(Math.log10(maxTime/10)));
+    if(maxTime/step>20)step*=5;else if(maxTime/step>10)step*=2;
+    for(var t2=0;t2<=maxTime;t2+=step){var x=offX+t2*scaleX;if(x<25||x>W-5)continue;ctx.fillText(fmtCU(t2),x,axisY);ctx.strokeStyle="#ddd";ctx.lineWidth=0.5;ctx.beginPath();ctx.moveTo(x,topMargin);ctx.lineTo(x,axisY-2);ctx.stroke();}
+  }
+
+  function hitTestSim(ex,ey){
+    var canvas=document.getElementById("simCanvas");if(!canvas)return null;
+    var rect=canvas.getBoundingClientRect();
+    var sc=canvas.width/rect.width;
+    var mx=(ex-rect.left)*sc,my=(ey-rect.top)*sc;
+    var scaleX=(canvas.width-60)/maxTime*SIM.zoom,offX=30+SIM.pan.x;
+    var cuPos=(mx-offX)/scaleX;
+    var laneIdx=-1;
+    for(var l=0;l<LANES;l++){var ly=topMargin+l*(laneH+laneGap);if(my>=ly&&my<ly+laneH){laneIdx=l;break;}}
+    if(laneIdx<0)return null;
+    for(var j=0;j<lanes[laneIdx].length;j++){var en=lanes[laneIdx][j];if(cuPos>=en.start&&cuPos<en.end)return{entry:en,lane:laneIdx};}
+    return null;
+  }
+
+  function showTxInfo(entry,laneIdx){
+    var tx=simTxList[entry.txIdx];
+    var idealStart=0;
+    for(var g=0;g<lanes[laneIdx].length;g++){if(lanes[laneIdx][g].txIdx===entry.txIdx){idealStart=g>0?lanes[laneIdx][g-1].end:0;break;}}
+    var delay=entry.start-idealStart;
+    var myKeySet={};
+    for(var ki=0;ki<tx.keys.length;ki++){if(!SYSVAR_RO.has(tx.keys[ki]))myKeySet[tx.keys[ki]]=1;}
+    var conflicts=[];
+    for(var ol=0;ol<LANES;ol++){
+      for(var oj=0;oj<lanes[ol].length;oj++){
+        var oe=lanes[ol][oj];
+        if(oe.txIdx>=entry.txIdx)continue;
+        var shared=[];
+        var otx=simTxList[oe.txIdx];
+        for(var ki2=0;ki2<otx.keys.length;ki2++){
+          var a=otx.keys[ki2];
+          if(SYSVAR_RO.has(a)||!myKeySet[a])continue;
+          var myWr=!!tx.wr[a],otherWr=!!otx.wr[a];
+          if(myWr||otherWr)shared.push({acct:a,type:myWr&&otherWr?"WW":myWr?"WR":"RW"});
+        }
+        if(shared.length)conflicts.push({idx:oe.txIdx,sig:otx.sig,lane:ol,start:oe.start,end:oe.end,shared:shared,blocks:oe.end>idealStart&&oe.start<entry.start});
+      }
+    }
+    conflicts.sort(function(a,b){return b.end-a.end;});
+    var h2='<div class="bdr card" style="margin-top:12px;padding:10px;font-size:12px">';
+    h2+='<div style="font-weight:600;margin-bottom:4px">Tx #'+entry.txIdx+' \u2014 '+tx.sig;
+    if(SIM.locked)h2+=' <span class="lbl">(locked \u2014 right-click to unlock)</span>';
+    h2+='</div>';
+    h2+='<b>'+fmtCU(tx.cu)+'</b> CU \u2014 Lane '+laneIdx+' \u2014 ['+fmtCU(entry.start)+' \u2192 '+fmtCU(entry.end)+']';
+    if(tx.err)h2+=' <span style="color:#a32d2d">FAILED</span>';
+    h2+='<br>';
+    if(delay>0){
+      h2+='<div style="margin:6px 0;padding:6px 10px;border-radius:6px;background:#faeeda;color:#854F0B;font-size:12px"><b>Delayed by '+fmtCU(delay)+' CU</b></div>';
+    } else {
+      h2+='<div style="margin:6px 0;font-size:12px;color:#639922"><b>No delay</b></div>';
+    }
+    if(conflicts.length){
+      // Mini timeline showing this tx and its conflicts
+      var allEntries=[{txIdx:entry.txIdx,start:entry.start,end:entry.end,lane:laneIdx,isSelf:true}];
+      for(var ci2=0;ci2<conflicts.length;ci2++){
+        allEntries.push({txIdx:conflicts[ci2].idx,start:conflicts[ci2].start,end:conflicts[ci2].end,lane:conflicts[ci2].lane,isSelf:false,blocks:conflicts[ci2].blocks});
+      }
+      var minT=entry.start,maxT=entry.end;
+      for(var ei=0;ei<allEntries.length;ei++){if(allEntries[ei].start<minT)minT=allEntries[ei].start;if(allEntries[ei].end>maxT)maxT=allEntries[ei].end;}
+      var pad=Math.max((maxT-minT)*0.1,1000);
+      minT=Math.max(0,minT-pad);maxT=maxT+pad;
+      var tlW=600,tlLaneH=20,tlMargin=20;
+      // Collect used lanes
+      var usedLanes={};usedLanes[laneIdx]=1;
+      for(var ei2=0;ei2<allEntries.length;ei2++)usedLanes[allEntries[ei2].lane]=1;
+      var laneList=Object.keys(usedLanes).map(Number).sort(function(a,b){return a-b;});
+      var laneMap={};for(var li=0;li<laneList.length;li++)laneMap[laneList[li]]=li;
+      var tlH=tlMargin+laneList.length*(tlLaneH+4)+25;
+
+      h2+='<div style="font-weight:500;margin:8px 0 3px">Conflict timeline:</div>';
+      h2+='<canvas id="conflictTimeline" style="display:block;border:1px solid #e0e0e0;border-radius:6px;background:#fafafa;width:100%;margin-bottom:8px"></canvas>';
+
+      window._conflictTL={minT:minT,maxT:maxT,tlLaneH:tlLaneH,tlMargin:tlMargin,laneList:laneList,laneMap:laneMap,allEntries:allEntries,selfIdx:entry.txIdx};
+    }
+
+    if(conflicts.length){
+      h2+='<div style="font-weight:500;margin:8px 0 3px">Higher-priority txs with conflicts ('+conflicts.length+'):</div>';
+      h2+='<table style="width:100%;border-collapse:collapse;font-size:11px;font-family:monospace">';
+      h2+='<tr style="border-bottom:2px solid #ddd;font-family:system-ui;font-weight:600;color:#666"><td style="padding:3px 4px">Tx</td><td style="padding:3px 4px">Lane</td><td style="padding:3px 4px">Time</td><td style="padding:3px 4px">Type</td><td style="padding:3px 4px">Account</td><td style="padding:3px 4px"></td></tr>';
+      for(var ci=0;ci<Math.min(conflicts.length,30);ci++){
+        var c=conflicts[ci],s=c.shared[0];
+        var tc=s.type==="WW"?"#a32d2d":s.type==="WR"?"#534AB7":"#854F0B";
+        h2+='<tr style="border-bottom:1px solid #f0f0f0'+(c.blocks?';background:#fdf8f0':'')+'">';
+        h2+='<td style="padding:3px 4px;font-weight:600">#'+c.idx+'</td>';
+        h2+='<td style="padding:3px 4px">L'+c.lane+'</td>';
+        h2+='<td style="padding:3px 4px;color:#666">'+fmtCU(c.start)+'\u2013'+fmtCU(c.end)+'</td>';
+        h2+='<td style="padding:3px 4px"><span style="padding:1px 5px;border-radius:3px;font-size:10px;background:'+(s.type==="WW"?"#fcebeb":s.type==="WR"?"#EEEDFE":"#faeeda")+';color:'+tc+'">'+s.type+'</span></td>';
+        h2+='<td style="padding:3px 4px">'+short(s.acct,6)+'</td>';
+        h2+='<td style="padding:3px 4px">'+(c.blocks?'<span style="color:#854F0B;font-size:9px;font-weight:700">BLOCKS</span>':'')+'</td>';
+        h2+='</tr>';
+      }
+      if(conflicts.length>30)h2+='<tr><td colspan="6" class="lbl" style="padding:3px 4px">+'+(conflicts.length-30)+' more</td></tr>';
+      h2+='</table>';
+    } else {
+      h2+='<div class="lbl">No conflicts with earlier transactions</div>';
+    }
+    h2+='</div>';
+    document.getElementById("detailEl").innerHTML=h2;
+
+    // Draw conflict timeline if present
+    if(window._conflictTL){
+      var tl=window._conflictTL;
+      var cv=document.getElementById("conflictTimeline");
+      if(cv){
+        var dpr=window.devicePixelRatio||1;
+        var cssW=cv.clientWidth||600;
+        var tlH2=tl.tlMargin+tl.laneList.length*(tl.tlLaneH+4)+35;
+        cv.width=cssW*dpr;
+        cv.height=tlH2*dpr;
+        cv.style.height=tlH2+"px";
+        var ctx=cv.getContext("2d");
+        ctx.scale(dpr,dpr);
+        var scX=(cssW-50)/(tl.maxT-tl.minT);
+        var ox=40;
+        // Lane labels
+        ctx.font="10px system-ui";ctx.textAlign="right";ctx.textBaseline="middle";ctx.fillStyle="#999";
+        for(var li=0;li<tl.laneList.length;li++){
+          var ly=tl.tlMargin+li*(tl.tlLaneH+4);
+          ctx.fillText("L"+tl.laneList[li],35,ly+tl.tlLaneH/2);
+          ctx.fillStyle="#f0f0f0";ctx.fillRect(ox,ly,cssW-50,tl.tlLaneH);ctx.fillStyle="#999";
+        }
+        // Draw entries
+        for(var ei=0;ei<tl.allEntries.length;ei++){
+          var e=tl.allEntries[ei];
+          var ly2=tl.tlMargin+tl.laneMap[e.lane]*(tl.tlLaneH+4);
+          var x1=ox+(e.start-tl.minT)*scX;
+          var x2=ox+(e.end-tl.minT)*scX;
+          var w=Math.max(x2-x1,2);
+          if(e.isSelf){
+            ctx.fillStyle="#185fa5";
+          } else if(e.blocks){
+            ctx.fillStyle="#D85A30";
+          } else {
+            ctx.fillStyle="#999";
+          }
+          ctx.fillRect(x1,ly2+1,w,tl.tlLaneH-2);
+          // Label
+          if(w>25){
+            ctx.font="bold 9px monospace";ctx.textAlign="left";ctx.textBaseline="middle";
+            ctx.fillStyle="#fff";
+            ctx.fillText("#"+e.txIdx,x1+3,ly2+tl.tlLaneH/2);
+          }
+        }
+        // Time axis
+        ctx.font="9px system-ui";ctx.textAlign="center";ctx.textBaseline="top";ctx.fillStyle="#666";
+        var axY=tl.tlMargin+tl.laneList.length*(tl.tlLaneH+4)+3;
+        var range=tl.maxT-tl.minT;
+        var step=Math.pow(10,Math.floor(Math.log10(range/5)));
+        if(range/step>10)step*=5;else if(range/step>5)step*=2;
+        var firstTick=Math.ceil(tl.minT/step)*step;
+        for(var t=firstTick;t<=tl.maxT;t+=step){
+          var tx2=ox+(t-tl.minT)*scX;
+          if(tx2<ox||tx2>cssW-5)continue;
+          ctx.fillText(fmtCU(t),tx2,axY);
+          ctx.strokeStyle="#ddd";ctx.lineWidth=0.5;ctx.beginPath();ctx.moveTo(tx2,tl.tlMargin);ctx.lineTo(tx2,axY-1);ctx.stroke();
+        }
+        // Legend
+        ctx.font="9px system-ui";ctx.textAlign="left";ctx.fillStyle="#185fa5";
+        var legY=axY+14;
+        ctx.fillRect(ox,legY,10,10);ctx.fillStyle="#185fa5";ctx.fillText("This tx",ox+14,legY+8);
+        ctx.fillStyle="#D85A30";ctx.fillRect(ox+70,legY,10,10);ctx.fillText("Blocking",ox+84,legY+8);
+        ctx.fillStyle="#999";ctx.fillRect(ox+150,legY,10,10);ctx.fillText("Conflict (no delay)",ox+164,legY+8);
+      }
+      window._conflictTL=null;
+    }
+  }
+
+  drawSim();
+
+  var simCanvas=document.getElementById("simCanvas");
+
+  simCanvas.onwheel=function(e){e.preventDefault();SIM.zoom=Math.max(0.1,Math.min(50,SIM.zoom*(e.deltaY>0?0.9:1.1)));drawSim();};
+
+  simCanvas.onmousedown=function(e){
+    if(e.button===0)SIM.dragStart={mx:e.clientX,px:SIM.pan.x};
+  };
+
+  simCanvas.onmouseup=function(){SIM.dragStart=null;};
+
+  simCanvas.onmouseleave=function(){SIM.dragStart=null;};
+
+  simCanvas.onmousemove=function(e){
+    if(SIM.dragStart){SIM.pan.x=SIM.dragStart.px+(e.clientX-SIM.dragStart.mx);drawSim();}
+    var hit=hitTestSim(e.clientX,e.clientY);
+    if(hit){SIM.lastHovered=hit.entry;SIM.lastLane=hit.lane;}
+    if(SIM.locked)return;
+    if(hit)showTxInfo(hit.entry,hit.lane);
+    else document.getElementById("detailEl").innerHTML="";
+  };
+
+  simCanvas.addEventListener("mousedown",function(e){
+    if(e.button===2){
+      e.preventDefault();
+      var ls=document.getElementById("lockStatus");
+      if(SIM.locked){
+        SIM.locked=null;
+        if(ls)ls.textContent="Unlocked";
+      } else if(SIM.lastHovered){
+        SIM.locked=SIM.lastHovered;
+        if(ls)ls.textContent="Locked on Tx #"+SIM.lastHovered.txIdx;
+        showTxInfo(SIM.lastHovered,SIM.lastLane);
+      }
+    }
+  });
+
+  simCanvas.addEventListener("contextmenu",function(e){e.preventDefault();});
+
+  document.getElementById("detailEl").innerHTML="";
+}
+
+function render(){
+  if(!DATA)return;
+  var txList=DATA.txList,f=getFiltered();
+  var sorted=[];for(var a in f.fAccts)sorted.push([a,f.fAccts[a]]);
+  sorted.sort(function(a,b){return b[1].writers-a[1].writers;});
+  var maxW=sorted.length?sorted[0][1].total:1;
+
+  document.getElementById("statsEl").innerHTML=
+    '<div class="stats">'+
+    '<div class="card"><div class="lbl">Total transactions</div><div class="stat-val">'+txList.length+'</div></div>'+
+    '<div class="card"><div class="lbl">Total CU</div><div class="stat-val">'+fmtCU(f.totalCU)+'</div></div>'+
+    '<div class="card"><div class="lbl">Write-contended accounts</div><div class="stat-val">'+sorted.length+'</div></div>'+
+    '<div class="card"><div class="lbl">Write-set clusters</div><div class="stat-val">'+f.clusters.length+'</div></div></div>';
+
+  document.getElementById("tabBar").innerHTML=
+    '<div class="tab-bar">'+
+    '<div class="tab '+(STATE.tab==="clusters"?"active":"")+'" data-tab="clusters">Transaction clusters</div>'+
+    '<div class="tab '+(STATE.tab==="accounts"?"active":"")+'" data-tab="accounts">Write-contended accounts</div>'+
+    '<div class="tab '+(STATE.tab==="graph"?"active":"")+'" data-tab="graph">Transaction graph</div>'+
+    '<div class="tab '+(STATE.tab==="acctgraph"?"active":"")+'" data-tab="acctgraph">Account graph</div>'+
+    '<div class="tab '+(STATE.tab==="simulate"?"active":"")+'" data-tab="simulate">Schedule</div></div>';
+  document.querySelectorAll("[data-tab]").forEach(function(el){el.onclick=function(){STATE.tab=el.dataset.tab;STATE.selAcct=null;STATE.selCluster=null;render();};});
+
+  var mainEl=document.getElementById("mainEl");
+
+  if(STATE.tab==="simulate"){
+    var txAccs=[],simTxList=[];
+    for(var i=0;i<txList.length;i++){
+      if(txList[i].isV)continue;
+      var acc={};for(var j=0;j<txList[i].keys.length;j++){var k=txList[i].keys[j];if(txList[i].wr[k]&&!SYSVAR_RO.has(k))acc[k]=1;}
+      simTxList.push(txList[i]);txAccs.push(acc);
+    }
+    mainEl.innerHTML='<div class="section-title">Scheduling '+simTxList.length+' non-vote transactions\u2026</div>';
+    document.getElementById("detailEl").innerHTML="";
+    setTimeout(function(){
+      var numLanes=parseInt(document.getElementById("lanesInput").value)||4;
+      var res=runSchedule(simTxList,txAccs,numLanes,48000000);
+      renderSchedule(simTxList,txAccs,res,numLanes,48000000,f);
+    },50);
+    return;
+
+  } else if(STATE.tab==="graph"){
+    var withA=f.clusters.filter(function(c){return c.accts.length>0;});
+    var nodes=[],aToN={};
+    for(var i=0;i<withA.length;i++){var c=withA[i];
+      nodes.push({id:i,x:Math.random()*800-400,y:Math.random()*600-300,vx:0,vy:0,r:Math.max(4,Math.sqrt(c.txIdxs.length)*5),label:c.txIdxs.length>1?c.txIdxs.length+"":"",color:PAL[i%12],data:c});
+      for(var j=0;j<c.accts.length;j++){var a=c.accts[j];if(!aToN[a])aToN[a]=[];aToN[a].push(i);}}
+    var edgeMap={},edges=[];
+    for(var a2 in aToN){var ns=aToN[a2];if(ns.length<2)continue;
+      for(var i2=0;i2<ns.length;i2++)for(var j2=i2+1;j2<ns.length;j2++){var x=Math.min(ns[i2],ns[j2]),y=Math.max(ns[i2],ns[j2]),ek=x+"-"+y;if(!edgeMap[ek]){edgeMap[ek]={from:x,to:y,accts:[],weight:0};edges.push(edgeMap[ek]);}edgeMap[ek].accts.push(a2);edgeMap[ek].weight++;}}
+    mainEl.innerHTML='<div class="section-title">Clusters connected by shared writable accounts ('+nodes.length+' nodes)</div><div class="lbl" style="margin-bottom:8px">Scroll to zoom, drag to reposition.</div><canvas id="graphCanvas" width="1000" height="600"></canvas>';
+    forceLayout(nodes,edges,150);
+    GS={nodes:nodes,edges:edges,hov:null,sel:null,drag:null,pan:{x:0,y:0},zoom:1,panSt:null,
+      infoFn:function(ni){var n=GS.nodes[ni],c=n.data,el=document.getElementById("detailEl");
+        var ce=GS.edges.filter(function(e){return e.from===ni||e.to===ni;});
+        var h='<div class="bdr card" style="margin-top:12px;padding:10px;font-size:12px"><b>'+c.txIdxs.length+' txs</b> \u2014 '+fmtCU(c.totalCU)+' CU<br><b>Writable:</b> ';
+        for(var i=0;i<c.accts.length;i++){var a=c.accts[i],info=f.fAccts[a];h+='<span class="acct-pill" title="'+a+'">'+short(a,3)+' \u00d7'+(info?info.writers:'?')+'</span>';}
+        if(ce.length){h+='<br><b>Connected to '+ce.length+' clusters:</b><br>';ce.sort(function(a,b){return b.weight-a.weight;});
+          for(var i2=0;i2<Math.min(ce.length,15);i2++){var e=ce[i2],oid=e.from===ni?e.to:e.from,o=GS.nodes[oid];h+='<div style="font-size:11px;margin:1px 0"><span style="color:'+o.color+';font-weight:600">'+o.data.txIdxs.length+'tx</span> via ';for(var j=0;j<Math.min(e.accts.length,5);j++)h+='<span class="acct-pill">'+short(e.accts[j],3)+'</span>';h+='</div>';}}
+        h+='</div>';el.innerHTML=h;}};
+    setupCanvas();drawCanvas();document.getElementById("detailEl").innerHTML="";
+
+  } else if(STATE.tab==="acctgraph"){
+    var nodes2=[],acctIdx={};
+    for(var i=0;i<sorted.length;i++){var a=sorted[i][0],info=sorted[i][1];
+      nodes2.push({id:i,x:Math.random()*800-400,y:Math.random()*600-300,vx:0,vy:0,r:Math.max(5,Math.sqrt(info.writers)*3),label:info.writers+"w",color:PAL[i%12],acct:a,info:info});acctIdx[a]=i;}
+    var edgeMap2={},edges2=[];
+    for(var ti=0;ti<txList.length;ti++){var tx=txList[ti],wa=[];for(var j=0;j<tx.keys.length;j++){var k=tx.keys[j];if(tx.wr[k]&&acctIdx[k]!==undefined)wa.push(acctIdx[k]);}
+      for(var i2=0;i2<wa.length;i2++)for(var j2=i2+1;j2<wa.length;j2++){var x2=Math.min(wa[i2],wa[j2]),y2=Math.max(wa[i2],wa[j2]),ek2=x2+"-"+y2;if(!edgeMap2[ek2]){edgeMap2[ek2]={from:x2,to:y2,weight:0};edges2.push(edgeMap2[ek2]);}edgeMap2[ek2].weight++;}}
+    var ec={};for(var e=0;e<edges2.length;e++){ec[edges2[e].from]=(ec[edges2[e].from]||0)+1;ec[edges2[e].to]=(ec[edges2[e].to]||0)+1;}
+    var keep={};for(var id in ec)if(ec[id]>=2)keep[id]=1;
+    var nn=[],idMap={};for(var i3=0;i3<nodes2.length;i3++){if(keep[i3]){idMap[i3]=nn.length;nn.push(nodes2[i3]);nn[nn.length-1].id=nn.length-1;}}
+    var ne=[];for(var e2=0;e2<edges2.length;e2++){var ef=idMap[edges2[e2].from],et=idMap[edges2[e2].to];if(ef!==undefined&&et!==undefined)ne.push({from:ef,to:et,weight:edges2[e2].weight});}
+    mainEl.innerHTML='<div class="section-title">Accounts connected by shared writes ('+nn.length+' nodes)</div><div class="lbl" style="margin-bottom:8px">Node size = writers. Edge = tx writes to both.</div><canvas id="graphCanvas" width="1000" height="600"></canvas>';
+    forceLayout(nn,ne,400);
+    GS={nodes:nn,edges:ne,hov:null,sel:null,drag:null,pan:{x:0,y:0},zoom:1,panSt:null,
+      infoFn:function(ni){var n=GS.nodes[ni],el=document.getElementById("detailEl");
+        var ce=GS.edges.filter(function(e){return e.from===ni||e.to===ni;}).sort(function(a,b){return b.weight-a.weight;});
+        var h='<div class="bdr card" style="margin-top:12px;padding:10px;font-size:12px"><b>Account</b><br><div class="mono lbl" style="word-break:break-all;margin:4px 0">'+n.acct+'</div>';
+        h+='<span style="color:#534AB7;font-weight:500">'+n.info.writers+' writers</span>, '+n.info.readers+' readers<br>';
+        if(ce.length){h+='<b>Co-written with '+ce.length+' accounts:</b><div style="max-height:250px;overflow-y:auto">';
+          for(var i=0;i<Math.min(ce.length,30);i++){var e=ce[i],oid=e.from===ni?e.to:e.from,o=GS.nodes[oid];h+='<div style="font-size:11px;margin:1px 0"><b style="color:#534AB7">'+e.weight+'tx</b> '+short(o.acct,6)+' <span class="lbl">('+o.info.writers+'w)</span></div>';}h+='</div>';}
+        h+='</div>';el.innerHTML=h;}};
+    setupCanvas();drawCanvas();document.getElementById("detailEl").innerHTML="";
+
+  } else if(STATE.tab==="clusters"){
+    var h='<div class="section-title">All transactions grouped by write-set ('+f.clusters.length+' groups)</div><div class="bdr" style="overflow:hidden">';
+    h+='<div class="cluster-row cluster-header"><span>Txs</span><span>Writable accounts (\u00d7writers)</span><span>CU</span><span>Reads</span></div>';
+    for(var ci=0;ci<f.clusters.length;ci++){var c=f.clusters[ci],sel=STATE.selCluster===ci?"selected":"";
+      var pills="";if(!c.accts.length)pills='<span class="lbl">read-only / system</span>';
+      else{for(var j=0;j<Math.min(c.accts.length,8);j++){var a=c.accts[j],info=f.fAccts[a];pills+='<span class="acct-pill" title="'+a+'">'+short(a,4)+' \u00d7'+(info?info.writers:"?")+'</span>';}if(c.accts.length>8)pills+='<span class="lbl"> +'+(c.accts.length-8)+'</span>';}
+      var rc=0;for(var k in c.readAccts)rc++;
+      h+='<div class="cluster-row '+sel+'" data-cluster="'+ci+'"><span style="font-weight:600;font-size:15px">'+c.txIdxs.length+'</span><span>'+pills+'</span><span class="cu">'+fmtCU(c.totalCU)+'</span><span class="lbl">'+rc+' accts</span></div>';}
+    h+='</div>';mainEl.innerHTML=h;
+    document.querySelectorAll("[data-cluster]").forEach(function(el){el.onclick=function(){var ci=parseInt(el.dataset.cluster);STATE.selCluster=STATE.selCluster===ci?null:ci;STATE.selAcct=null;renderDetail();};});
+    renderDetail();
+
+  } else {
+    var shown=sorted.slice(0,500);
+    var h='<div class="section-title">Accounts with 2+ writers ('+sorted.length+')</div><div class="bdr" style="overflow:hidden">';
+    h+='<div class="acct-row acct-header"><span>Account</span><span>Contention</span><span>Writes</span><span>Reads</span><span>CU</span></div>';
+    for(var i=0;i<shown.length;i++){var a=shown[i][0],info=shown[i][1],sel=STATE.selAcct===a?"selected":"";
+      var wP=Math.max(2,Math.round(info.writers/maxW*250)),rP=Math.round(info.readers/maxW*250);
+      var tcu=0;for(var j=0;j<info.txIdxs.length;j++)tcu+=txList[info.txIdxs[j]].cu;
+      h+='<div class="acct-row '+sel+'" data-acct="'+a+'"><span class="mono" title="'+a+'">'+short(a,6)+'</span><span class="bar-wrap"><span class="bar-w" style="width:'+wP+'px"></span>'+(rP?'<span class="bar-r" style="width:'+rP+'px"></span>':'')+'</span><span style="font-weight:500;color:#534AB7">'+info.writers+'</span><span style="color:#666">'+info.readers+'</span><span class="cu">'+fmtCU(tcu)+'</span></div>';}
+    h+='</div>';mainEl.innerHTML=h;
+    document.querySelectorAll("[data-acct]").forEach(function(el){el.onclick=function(){STATE.selAcct=STATE.selAcct===el.dataset.acct?null:el.dataset.acct;STATE.selCluster=null;renderDetail();};});
+    renderDetail();
+  }
+}
+
+function renderDetail(){
+  var el=document.getElementById("detailEl");if(!DATA){el.innerHTML="";return;}
+  var txList=DATA.txList,f=getFiltered();
+  if(STATE.selAcct){
+    var a=STATE.selAcct,info=f.fAccts[a];if(!info){el.innerHTML="";return;}
+    var writers=[],readers=[];for(var i=0;i<info.txIdxs.length;i++){var ti=info.txIdxs[i];if(txList[ti].wr[a])writers.push(ti);else readers.push(ti);}
+    var tcu=0;for(var i2=0;i2<info.txIdxs.length;i2++)tcu+=txList[info.txIdxs[i2]].cu;
+    var h='<div class="bdr card" style="margin-top:12px;padding:10px;font-size:12px"><b>Account</b><br><div class="mono lbl" style="word-break:break-all;margin:4px 0">'+a+'</div>';
+    h+='<span style="color:#534AB7;font-weight:500">'+writers.length+' writers</span>, '+readers.length+' readers \u2014 '+fmtCU(tcu)+' CU<br>';
+    h+='<b>Writers:</b><div style="max-height:250px;overflow-y:auto">';
+    for(var i3=0;i3<Math.min(writers.length,50);i3++){var tx=txList[writers[i3]];h+='<div class="detail-tx"><span style="color:#999;min-width:45px">#'+writers[i3]+'</span><span>'+tx.sig+'</span><span class="tag-w">W</span><span class="cu">'+fmtCU(tx.cu)+'</span></div>';}h+='</div>';
+    if(readers.length){h+='<b>Readers ('+readers.length+'):</b><div style="max-height:150px;overflow-y:auto">';for(var i4=0;i4<Math.min(readers.length,30);i4++){var tx2=txList[readers[i4]];h+='<div class="detail-tx"><span style="color:#999;min-width:45px">#'+readers[i4]+'</span><span>'+tx2.sig+'</span><span class="tag-r">R</span><span class="cu">'+fmtCU(tx2.cu)+'</span></div>';}h+='</div>';}
+    h+='</div>';el.innerHTML=h;
+  } else if(STATE.selCluster!==null&&f.clusters[STATE.selCluster]){
+    var c=f.clusters[STATE.selCluster];
+    var h='<div class="bdr card" style="margin-top:12px;padding:10px;font-size:12px"><b>'+c.txIdxs.length+' transactions</b> \u2014 '+fmtCU(c.totalCU)+' CU<br>';
+    if(c.accts.length){h+='<b>Writable:</b><br>';for(var i=0;i<c.accts.length;i++){var a=c.accts[i],info=f.fAccts[a];h+='<div class="mono"><span class="click" data-acct="'+a+'">'+a+'</span> <span class="lbl">\u00d7'+(info?info.writers:'\u2014')+' writers</span></div>';}h+='<br>';}
+    var rc=[];for(var k in c.readAccts)rc.push(k);
+    if(rc.length){h+='<b>Reads:</b> ';for(var i2=0;i2<Math.min(rc.length,20);i2++)h+='<span class="acct-pill read">'+short(rc[i2],4)+'</span>';if(rc.length>20)h+=' <span class="lbl">+'+(rc.length-20)+'</span>';h+='<br>';}
+    h+='<b>Transactions:</b><div style="max-height:300px;overflow-y:auto">';
+    for(var i3=0;i3<Math.min(c.txIdxs.length,100);i3++){var tx=txList[c.txIdxs[i3]];h+='<div class="detail-tx"><span style="color:#999;min-width:45px">#'+c.txIdxs[i3]+'</span><span>'+tx.sig+'</span><span class="cu">'+fmtCU(tx.cu)+'</span><span class="lbl">'+tx.keys.length+' accts</span>'+(tx.err?'<span style="color:#a32d2d;font-size:9px">FAIL</span>':'')+'</div>';}
+    h+='</div></div>';el.innerHTML=h;
+    el.querySelectorAll("[data-acct]").forEach(function(e){e.onclick=function(){STATE.selAcct=e.dataset.acct;STATE.selCluster=null;STATE.tab="accounts";render();};});
+  } else el.innerHTML="";
+}
+
+doFetch();
+</script></body></html>
